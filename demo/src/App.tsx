@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { HF, initialModel, MODELS, type ModelEntry } from "./gaze/models";
 import { fetchInfo, loadModel, planModel, type Backend, type Dtype, type GazeModel } from "./gaze/model";
@@ -19,11 +18,9 @@ const BG = "#7a7a7a"; // mid grey behind the dots
 const PRESS_MAX_MS = 50, PRESS_SLACK_MS = 100;
 const MOVE_MS = 600; // a calibration dot glides this long to its place; Space counts once it has stopped
 
-function guessWidthCm(): number {
-  const aspect = screen.width / screen.height;
-  if (devicePixelRatio === 2 && aspect > 1.5 && aspect < 1.62) return 30.2; // 14" MacBook Pro
-  return +((screen.width * 2.54) / 96).toFixed(1);
-}
+// The model works in its calibration box's units, so the page's physical size cancels out (calibration dots in and
+// predictions out use the same mm-per-px); the nominal CSS pixel (1/96 inch) is used for the mm in between.
+const CSS_CM_PER_PX = 2.54 / 96;
 
 async function listCameras() {
   return (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
@@ -41,13 +38,11 @@ export function App() {
   const [model, setModel] = useState<ModelEntry>(initialModel);
   const [cams, setCams] = useState<MediaDeviceInfo[]>([]);
   const [cam, setCam] = useState(localStorage.getItem("gaze-demo-cam") ?? "");
-  const [widthCm, setWidthCm] = useState(() => +(localStorage.getItem("gaze-demo-width-cm") ?? guessWidthCm()));
   const [running, setRunning] = useState(false);
   const runRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { listCameras().then(setCams).catch(() => {}); }, []);
   useEffect(() => { localStorage.setItem("gaze-demo-cam", cam); }, [cam]);
-  useEffect(() => { localStorage.setItem("gaze-demo-width-cm", String(widthCm)); }, [widthCm]);
 
   if (clip) return <ClipRun clipUrl={clip} entry={model} want={WANT} />;
 
@@ -83,15 +78,10 @@ export function App() {
               {cams.filter((c) => c.deviceId).map((c) => <option key={c.deviceId} value={c.deviceId}>{c.label || c.deviceId.slice(0, 8)}</option>)}
             </select>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="width">Visible screen width (cm)</Label>
-            <Input id="width" type="number" step="0.1" min="5" value={widthCm} onChange={(e) => setWidthCm(+e.target.value)} />
-            <p className="text-xs text-muted-foreground">
-              The width of the lit area of this screen, edge to edge. It converts the model's millimetres to pixels. Put the
-              camera at the top of the screen, sit as you normally would, keep the face well lit.
-            </p>
-          </div>
-          <Button size="lg" onClick={start} disabled={!model.available || !(widthCm > 0)}>Start</Button>
+          <p className="text-xs text-muted-foreground">
+            Put the camera at the top of the screen, sit as you normally would, keep the face well lit.
+          </p>
+          <Button size="lg" onClick={start} disabled={!model.available}>Start</Button>
         </div>
         <footer className="space-y-1 border-t pt-4 text-xs text-muted-foreground">
           <p>
@@ -102,7 +92,7 @@ export function App() {
         </footer>
       </div>
       <div ref={runRef} className={running ? "fixed inset-0 z-50" : "hidden"} style={{ background: BG }}>
-        {running && <Run entry={model} camId={cam} widthCm={widthCm} onExit={() => { setRunning(false); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); }} />}
+        {running && <Run entry={model} camId={cam} onExit={() => { setRunning(false); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); }} />}
       </div>
     </>
   );
@@ -112,7 +102,7 @@ type Phase = { kind: "loading"; text: string; frac: number } | { kind: "error"; 
 
 interface FrameGrab { t: number; lm: Pt[]; region: Rgba; fw: number; fh: number }
 
-function Run({ entry, camId, widthCm, onExit }: { entry: ModelEntry; camId: string; widthCm: number; onExit: () => void }) {
+function Run({ entry, camId, onExit }: { entry: ModelEntry; camId: string; onExit: () => void }) {
   const [phase, setPhase] = useState<Phase>({ kind: "loading", text: "Loading", frac: 0 });
   const [hud, setHud] = useState("");
   const [note, setNote] = useState("");
@@ -127,7 +117,7 @@ function Run({ entry, camId, widthCm, onExit }: { entry: ModelEntry; camId: stri
     busy: false, gaze: null as [number, number] | null, raw: null as [number, number] | null, ms: 0, n: 0, t0: 0,
     phase: "loading" as Phase["kind"], filter: createOneEuro(),
   });
-  const page = (): Page => ({ w: innerWidth, h: innerHeight, widthCm });
+  const page = (): Page => ({ w: innerWidth, h: innerHeight, widthCm: innerWidth * CSS_CM_PER_PX });
 
   // model, landmarker, camera
   useEffect(() => {
