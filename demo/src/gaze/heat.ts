@@ -1,34 +1,34 @@
 // The gaze heat map: the model's two per-axis bin distributions (x and y, each over its calibration box) taken as
-// independent, p(x, y) = px(x) py(y), drawn as a coloured overlay. Smoothed over time so it does not flicker.
+// independent within one prediction, p(x, y) = px(x) py(y), drawn as a coloured overlay. The 2D map itself is smoothed
+// over predictions (smoothing x and y apart would cross one prediction's x with another's y: ghost blobs).
 import type { Dist } from "./model";
 import { mmToPage, type Page } from "./screen";
 
-export function createHeat(ema = 0.5) {
-  let px: Float32Array | null = null, py: Float32Array | null = null, xMm: Float32Array | null = null, yMm: Float32Array | null = null;
+export function createHeat(ema = 0.5, floor = 0.15) {
+  let map: Float32Array | null = null, nx = 0, ny = 0, xMm: Float32Array | null = null, yMm: Float32Array | null = null;
   let img: ImageData | null = null;
   const off = document.createElement("canvas");
   return {
     push(d: Dist) {
-      if (!px || px.length !== d.px.length || py!.length !== d.py.length) { px = Float32Array.from(d.px); py = Float32Array.from(d.py); }
-      else for (let i = 0; i < px.length; i++) px[i] = ema * px[i] + (1 - ema) * d.px[i];
-      if (py && py.length === d.py.length) for (let j = 0; j < py.length; j++) py[j] = ema * py[j] + (1 - ema) * d.py[j];
+      const fresh = !map || nx !== d.px.length || ny !== d.py.length;
+      if (fresh) { nx = d.px.length; ny = d.py.length; map = new Float32Array(nx * ny); }
+      const m = map!, w = fresh ? 1 : 1 - ema;
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const k = j * nx + i; m[k] = (1 - w) * m[k] + w * d.px[i] * d.py[j]; }
       xMm = d.xMm; yMm = d.yMm;
     },
-    reset() { px = py = xMm = yMm = null; },
+    reset() { map = xMm = yMm = null; },
     draw(g: CanvasRenderingContext2D, page: Page) {
-      if (!px || !py || !xMm || !yMm) return;
-      const nx = px.length, ny = py.length;
+      if (!map || !xMm || !yMm) return;
       if (!img || img.width !== nx || img.height !== ny) { img = new ImageData(nx, ny); off.width = nx; off.height = ny; }
-      let mx = 0, my = 0;
-      for (const v of px) mx = Math.max(mx, v);
-      for (const v of py) my = Math.max(my, v);
-      const top = mx * my || 1, a = img.data;
-      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-        const t = Math.sqrt((px[i] * py[j]) / top); // sqrt: the tails stay visible
-        const o = 4 * (j * nx + i);
-        // transparent -> yellow -> red
-        a[o] = 255; a[o + 1] = Math.round(230 * (1 - t) + 40 * t); a[o + 2] = Math.round(60 * (1 - t));
-        a[o + 3] = t < 0.04 ? 0 : Math.round(200 * Math.min(1, t * 1.2));
+      let top = 0;
+      for (const v of map) top = Math.max(top, v);
+      const a = img.data;
+      for (let k = 0; k < map.length; k++) {
+        const t = map[k] / (top || 1), o = 4 * k;
+        // below `floor` of the peak: nothing drawn; above it transparent yellow -> opaque red
+        const u = t <= floor ? 0 : (t - floor) / (1 - floor);
+        a[o] = 255; a[o + 1] = Math.round(220 * (1 - u) + 30 * u); a[o + 2] = Math.round(50 * (1 - u));
+        a[o + 3] = Math.round(210 * u);
       }
       off.getContext("2d")!.putImageData(img, 0, 0);
       // bin centres are evenly spaced in mm, so the grid maps to an axis-aligned page rectangle (x is mirrored)
