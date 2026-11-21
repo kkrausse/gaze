@@ -8,13 +8,15 @@ export interface ModelEntry {
   label: string;
   available: boolean; // false: listed, not published yet
   licence: string; // of the weights
+  rev?: string; // Hugging Face revision (branch / tag), default main
 }
 
 export const HF = "https://huggingface.co/";
 
 export const MODELS: ModelEntry[] = [
-  { id: "m68", repo: "kkrausse/gaze-nc", label: "m68 (gaze-nc)", available: true, licence: "Sapiens2 License, non-commercial use only" },
-  { id: "m69", repo: "kkrausse/gaze", label: "m69 (gaze)", available: true, licence: "Sapiens2 License" },
+  { id: "m91c", repo: "kkrausse/gaze", label: "m91c (gaze, 4-dot calibration)", available: true, licence: "Sapiens2 License" },
+  { id: "m69", repo: "kkrausse/gaze", rev: "m69", label: "m69 (gaze, earlier, 9-dot)", available: true, licence: "Sapiens2 License" },
+  { id: "m68", repo: "kkrausse/gaze-nc", label: "m68 (gaze-nc, 9-dot)", available: true, licence: "Sapiens2 License, non-commercial use only" },
 ];
 
 export function hfBase(): string {
@@ -23,7 +25,7 @@ export function hfBase(): string {
   return o ? (o.endsWith("/") ? o : o + "/") : HF;
 }
 
-export const fileUrl = (m: ModelEntry, file: string) => `${hfBase()}${m.repo}/resolve/main/${file}`;
+export const fileUrl = (m: ModelEntry, file: string) => `${hfBase()}${m.repo}/resolve/${m.rev ?? "main"}/${file}`;
 
 /** ?model=<id> picks the model (else the first available). */
 export function initialModel(): ModelEntry {

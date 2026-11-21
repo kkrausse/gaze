@@ -27,6 +27,8 @@ export interface ModelInfo {
   cam_delay_ms: number; // the calibration frame = the one showing the eye this long after the Space press
   files: Record<"fp16" | "fp32", ModelFile>;
   kv_files: Record<"fp16" | "fp32", ModelFile>;
+  /** The log crop-scale input (aux[29]) is relative to the calibration frames: minus their mean (setScaleRef). */
+  aux_scale_rel?: boolean;
 }
 
 export type Backend = "webgpu" | "wasm";
@@ -44,8 +46,13 @@ export interface GazeModel {
   /** One frame with the current context (none until setContext); wantCal: also return the frame's `cal`. */
   run(img: Float32Array, aux: Float32Array, wantCal?: boolean): Promise<GazeOut>;
   setContext(ctx: Context | null): Promise<void>;
+  /** aux_scale_rel models: the calibration frames' mean aux[29] (scaleRef), subtracted from every frame's; null = none yet. */
+  setScaleRef(ref: number | null): void;
   release(): Promise<void>;
 }
+
+/** The reference for aux_scale_rel: the mean log crop scale of the calibration frames (training: the ring corners). */
+export const scaleRef = (auxs: Float32Array[]) => auxs.reduce((s, a) => s + a[29], 0) / Math.max(1, auxs.length);
 
 export async function fetchInfo(m: ModelEntry): Promise<ModelInfo> {
   const r = await fetch(fileUrl(m, "model.json"), { cache: "no-cache" });
@@ -168,7 +175,7 @@ function xattnModel(info: ModelInfo, plan: Plan, session: ort.InferenceSession, 
     const at = (c: number[], o: number, h: number) => Float32Array.from(c, (u) => (o + h * u) * 100);
     return { px, py, xMm: at(bc.x, b[0], b[2]), yMm: at(bc.y, b[1], b[3]) };
   };
-  let none: Packed | null = null, packed: Packed | null = null;
+  let none: Packed | null = null, packed: Packed | null = null, sref: number | null = null;
   const free = (p: Packed | null) => { if (p && p !== none) { p.k.dispose?.(); p.v.dispose?.(); } };
   // passes and context swaps on one chain: a context's GPU tensors are released only when no pass can still read them
   let chain: Promise<unknown> = Promise.resolve();
@@ -179,6 +186,7 @@ function xattnModel(info: ModelInfo, plan: Plan, session: ort.InferenceSession, 
       none ??= await pack(null);
       const p = packed ?? none;
       const t0 = performance.now();
+      if (info.aux_scale_rel && sref !== null) { aux = Float32Array.from(aux); aux[29] -= sref; }
       const out = await session.run({
         img: new ort.Tensor("float32", img, [1, H, W, 3]),
         aux: new ort.Tensor("float32", aux.subarray(0, nAux), [1, nAux]),
@@ -192,6 +200,7 @@ function xattnModel(info: ModelInfo, plan: Plan, session: ort.InferenceSession, 
       packed = ctx?.cal.length ? await pack(ctx) : null;
       free(old);
     }),
+    setScaleRef: (r) => { sref = r; },
     release: async () => { await chain; free(packed); free(none); none = null; await session.release(); await kv.release(); },
   };
 }

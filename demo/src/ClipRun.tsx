@@ -9,7 +9,7 @@
 // The result is also left in window.__clipResult.
 import { useEffect, useState } from "react";
 import type { ModelEntry } from "./gaze/models";
-import { fetchInfo, loadModel, planModel, type Backend, type Dtype } from "./gaze/model";
+import { fetchInfo, loadModel, planModel, scaleRef, type Backend, type Dtype } from "./gaze/model";
 import { createLandmarker } from "./gaze/landmarks";
 import { cutWindow, grabRegion, type Pt } from "./gaze/window";
 import { contextOrder } from "./gaze/calib";
@@ -65,6 +65,7 @@ export function ClipRun({ clipUrl, entry, want }: { clipUrl: string; entry: Mode
         const out: ClipFrameResult[] = [];
         const cals: { grid: number; mm: [number, number]; cal: Float32Array }[] = [];
         const later: { i: number; img: Float32Array; aux: Float32Array }[] = [];
+        const dots: { i: number; grid: number; mm: [number, number]; img: Float32Array; aux: Float32Array }[] = [];
         for (const [i, f] of clip.frames.entries()) {
           for (const l of f.lead ?? []) { const im = await load(l); detect(im, (t += 33), im.naturalWidth, im.naturalHeight); }
           const im = await load(f.src);
@@ -86,13 +87,17 @@ export function ClipRun({ clipUrl, entry, want }: { clipUrl: string; entry: Mode
             for (let k = 0; k < ref.length; k++) { const d = Math.abs(ref[k] - win.img[k]); s += d; if (d > mx) mx = d; }
             r.pixMax = mx; r.pixMean = s / ref.length;
           }
-          if (f.dot) {
-            const o = await model.run(win.img, win.aux, true);
-            cals.push({ grid: f.dot.grid, mm: pageToMm(clip.page, f.dot.page[0], f.dot.page[1]), cal: o.cal! });
-            r.ms = o.ms;
-            say(`dot ${cals.length} (grid ${f.dot.grid}): ${o.ms.toFixed(0)} ms`);
-          } else later.push({ i, img: win.img, aux: win.aux });
+          if (f.dot) dots.push({ i, grid: f.dot.grid, mm: pageToMm(clip.page, f.dot.page[0], f.dot.page[1]), img: win.img, aux: win.aux });
+          else later.push({ i, img: win.img, aux: win.aux });
           if (alive) setRows([...out]);
+        }
+        // as the live page: the calibration passes after the last dot, with the crop-scale reference from all of them
+        model.setScaleRef(scaleRef(dots.map((d) => d.aux)));
+        for (const d of dots) {
+          const o = await model.run(d.img, d.aux, true);
+          cals.push({ grid: d.grid, mm: d.mm, cal: o.cal! });
+          out[d.i].ms = o.ms;
+          say(`dot ${cals.length} (grid ${d.grid}): ${o.ms.toFixed(0)} ms`);
         }
         const order = contextOrder(cals);
         say(`context order (grid): ${order.map((k) => cals[k].grid).join(",")}`);

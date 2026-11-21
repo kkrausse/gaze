@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { HF, initialModel, MODELS, type ModelEntry } from "./gaze/models";
-import { fetchInfo, loadModel, planModel, type Backend, type Dtype, type GazeModel } from "./gaze/model";
+import { fetchInfo, loadModel, planModel, scaleRef, type Backend, type Dtype, type GazeModel } from "./gaze/model";
 import { createLandmarker, type Detect } from "./gaze/landmarks";
 import { cutWindow, grabRegion, type Pt } from "./gaze/window";
 import type { Rgba } from "./gaze/warp";
@@ -215,6 +215,7 @@ function Run({ entry, camId, onExit }: { entry: ModelEntry; camId: string; onExi
     const s = st.current;
     s.cals = []; s.press = null; s.gaze = s.raw = null; s.filter.reset(); s.heat.reset();
     s.model?.setContext(null);
+    s.model?.setScaleRef(null);
     showDot(0, performance.now());
   };
   function finishPress() {
@@ -238,6 +239,7 @@ function Run({ entry, camId, onExit }: { entry: ModelEntry; camId: string; onExi
     const s = st.current;
     setPhase({ kind: "loading", text: "Calibrating", frac: 1 });
     const cal: (Float32Array | null)[] = [];
+    s.model!.setScaleRef(scaleRef(s.cals.map((c) => c.aux)));
     for (const [i, c] of s.cals.entries()) {
       setPhase({ kind: "loading", text: `Calibrating: dot ${i + 1} of ${s.cals.length}`, frac: i / s.cals.length });
       cal.push(await s.model!.run(c.img, c.aux, true).then((o) => o.cal ?? null).catch(() => null));
