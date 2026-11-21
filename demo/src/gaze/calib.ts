@@ -1,9 +1,11 @@
-// The 9-dot calibration: a 3x3 grid at the page's edges (the dot's radius + 4 px in from each edge), shown
+// The calibration: 4 corners (default) or a 9-dot 3x3 grid at the page's edges (the dot's radius + 4 px in from each edge), shown
 // clockwise from the top-left corner with the centre last. The model gets the dots as its context in a fixed
 // order: the 4 corners first (grid order), then farthest-point from those.
 
 export const EDGE_PX = 14;
 export const SHOW_ORDER = [0, 1, 2, 5, 8, 7, 6, 3, 4]; // row-major grid index
+/** The 4-dot calibration: the corners only, clockwise from the top-left. */
+export const SHOW_ORDER_4 = [0, 2, 8, 6];
 const CORNERS = [0, 2, 6, 8];
 
 /** Page px of grid point i (row-major 3x3). */

@@ -6,9 +6,10 @@ import { fetchInfo, loadModel, planModel, type Backend, type Dtype, type GazeMod
 import { createLandmarker, type Detect } from "./gaze/landmarks";
 import { cutWindow, grabRegion, type Pt } from "./gaze/window";
 import type { Rgba } from "./gaze/warp";
-import { contextOrder, gridPoint, SHOW_ORDER } from "./gaze/calib";
+import { contextOrder, gridPoint, SHOW_ORDER as SHOW_ORDER_9, SHOW_ORDER_4 } from "./gaze/calib";
 import { createOneEuro, mmToPage, pageToMm, type Page } from "./gaze/screen";
 import { ClipRun } from "./ClipRun";
+import { createHeat } from "./gaze/heat";
 
 const params = new URLSearchParams(location.search);
 const WANT = { backend: (params.get("backend") as Backend) || undefined, dtype: (params.get("dtype") as Dtype) || undefined };
@@ -16,7 +17,9 @@ const BG = "#7a7a7a"; // mid grey behind the dots
 // A calibration dot's frame: the one closest to press + camera delay, at most PRESS_MAX_MS off; when the page
 // skipped frames around then (busy main thread, slow camera), the nearest one up to PRESS_SLACK_MS off.
 const PRESS_MAX_MS = 50, PRESS_SLACK_MS = 100;
-const MOVE_MS = 600; // a calibration dot glides this long to its place; Space counts once it has stopped
+const MOVE_MS = 180; // a calibration dot glides this long to its place; Space counts once it has stopped
+// 4 corner dots by default (the models score within ~1-2 mm of 9 dots there); ?dots=9 for the full grid
+const SHOW_ORDER = params.get("dots") === "9" ? SHOW_ORDER_9 : SHOW_ORDER_4;
 
 // The model works in its calibration box's units, so the page's physical size cancels out (calibration dots in and
 // predictions out use the same mm-per-px); the nominal CSS pixel (1/96 inch) is used for the mm in between.
@@ -58,7 +61,7 @@ export function App() {
           <h1 className="text-2xl font-semibold">Gaze demo</h1>
           <p className="text-sm text-muted-foreground">
             Webcam gaze tracking in the browser. Everything runs on this device: camera frames never leave the page. The model
-            (several hundred MB) is downloaded once and kept in the browser's cache. After a 9-dot calibration a red dot shows
+            (several hundred MB) is downloaded once and kept in the browser's cache. After a calibration on the 4 screen corners a heat map shows
             where you are looking.
           </p>
         </header>
@@ -115,7 +118,7 @@ function Run({ entry, camId, onExit }: { entry: ModelEntry; camId: string; onExi
     press: null as null | { tp: number; best: FrameGrab | null; bestD: number },
     cals: [] as { grid: number; mm: [number, number]; img: Float32Array; aux: Float32Array }[],
     busy: false, gaze: null as [number, number] | null, raw: null as [number, number] | null, ms: 0, n: 0, t0: 0,
-    phase: "loading" as Phase["kind"], filter: createOneEuro(),
+    phase: "loading" as Phase["kind"], filter: createOneEuro(), heat: createHeat(),
   });
   const page = (): Page => ({ w: innerWidth, h: innerHeight, widthCm: innerWidth * CSS_CM_PER_PX });
 
@@ -194,6 +197,7 @@ function Run({ entry, camId, onExit }: { entry: ModelEntry; camId: string; onExi
         (window as unknown as { __gaze: unknown }).__gaze = { mm: o.mm, vt, n: s.n + 1 };
         s.raw = mmToPage(page(), o.mm[0], o.mm[1]);
         s.gaze = s.filter.filter(performance.now(), s.raw);
+        s.heat.push(o.dist);
         s.ms = o.ms; s.n++;
       }).catch((e) => console.warn(e)).finally(() => { s.busy = false; });
     }
@@ -209,7 +213,7 @@ function Run({ entry, camId, onExit }: { entry: ModelEntry; camId: string; onExi
   };
   const startCalib = () => {
     const s = st.current;
-    s.cals = []; s.press = null; s.gaze = s.raw = null; s.filter.reset();
+    s.cals = []; s.press = null; s.gaze = s.raw = null; s.filter.reset(); s.heat.reset();
     s.model?.setContext(null);
     showDot(0, performance.now());
   };
@@ -282,8 +286,8 @@ function Run({ entry, camId, onExit }: { entry: ModelEntry; camId: string; onExi
           if (a >= 1) { g.fillStyle = "#000"; g.beginPath(); g.arc(x, y, 2, 0, Math.PI * 2); g.fill(); }
         }
         if (s.phase === "live") {
-          if (s.raw) { g.strokeStyle = "rgba(255,255,255,0.5)"; g.lineWidth = 1.5; g.beginPath(); g.arc(s.raw[0], s.raw[1], 6, 0, Math.PI * 2); g.stroke(); }
-          if (s.gaze) { g.fillStyle = "#e11d48"; g.beginPath(); g.arc(s.gaze[0], s.gaze[1], 12, 0, Math.PI * 2); g.fill(); }
+          s.heat.draw(g, page());
+          if (s.gaze) { g.strokeStyle = "rgba(255,255,255,0.9)"; g.lineWidth = 2; g.beginPath(); g.arc(s.gaze[0], s.gaze[1], 7, 0, Math.PI * 2); g.stroke(); }
         }
       }
       raf = requestAnimationFrame(draw);
@@ -318,7 +322,7 @@ function Run({ entry, camId, onExit }: { entry: ModelEntry; camId: string; onExi
       {phase.kind === "intro" && (
         <div className="absolute inset-0 grid place-items-center text-center">
           <div className="max-w-md space-y-2">
-            <div className="text-lg">Calibration: 9 dots</div>
+            <div className="text-lg">Calibration: {SHOW_ORDER.length} dots</div>
             <div className="text-sm">Look at each dot. When it has stopped, press Space while looking at its centre.</div>
             <div className="text-sm">{faceOk ? "Face found." : "No face found yet: check the camera and the light."}</div>
             <div className="text-sm font-medium">Press Space to begin · Esc to leave</div>
