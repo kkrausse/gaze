@@ -239,7 +239,7 @@ function Run({ entry, camId, onExit }: { entry: ModelEntry; camId: string; onExi
     const s = st.current;
     setPhase({ kind: "loading", text: "Calibrating", frac: 1 });
     const cal: (Float32Array | null)[] = [];
-    s.model!.setScaleRef(scaleRef(s.cals.map((c) => c.aux)));
+    s.model!.setScaleRef(scaleRef(s.cals));
     for (const [i, c] of s.cals.entries()) {
       setPhase({ kind: "loading", text: `Calibrating: dot ${i + 1} of ${s.cals.length}`, frac: i / s.cals.length });
       cal.push(await s.model!.run(c.img, c.aux, true).then((o) => o.cal ?? null).catch(() => null));

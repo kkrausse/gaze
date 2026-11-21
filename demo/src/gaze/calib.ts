@@ -6,7 +6,7 @@ export const EDGE_PX = 14;
 export const SHOW_ORDER = [0, 1, 2, 5, 8, 7, 6, 3, 4]; // row-major grid index
 /** The 4-dot calibration: the corners only, clockwise from the top-left. */
 export const SHOW_ORDER_4 = [0, 2, 8, 6];
-const CORNERS = [0, 2, 6, 8];
+export const CORNERS = [0, 2, 6, 8];
 
 /** Page px of grid point i (row-major 3x3). */
 export function gridPoint(i: number, w: number, h: number): [number, number] {

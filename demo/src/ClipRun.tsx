@@ -21,6 +21,8 @@ interface Clip { page: Page; frames: ClipFrame[] }
 export interface ClipFrameResult {
   src: string; dot: boolean; lm: Pt[] | null; lmGiven: boolean; lmDiffPx?: number; aux?: number[]; auxDiff?: number;
   pixMax?: number; pixMean?: number; mm?: [number, number]; ms?: number;
+  /** aux_scale_rel models: aux[29] as the model gets it (minus the calibration reference) and its difference from the clip's */
+  aux29?: number; aux29Diff?: number;
 }
 
 const AUX_USED = [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 27, 28, 29, 30];
@@ -80,7 +82,8 @@ export function ClipRun({ clipUrl, entry, want }: { clipUrl: string; entry: Mode
           if (!region) { say(`${f.src}: window outside the frame`); continue; }
           const win = cutWindow(region, lm, info.window, W, H);
           r.aux = Array.from(win.aux);
-          if (f.aux) r.auxDiff = Math.max(...AUX_USED.map((k) => Math.abs(win.aux[k] - f.aux![k])));
+          // aux_scale_rel: the clip's aux[29] is relative to the calibration; compared once the reference is known
+          if (f.aux) r.auxDiff = Math.max(...AUX_USED.filter((k) => !info.aux_scale_rel || k !== 29).map((k) => Math.abs(win.aux[k] - f.aux![k])));
           if (f.ref) {
             const ref = new Uint8Array(await (await fetch(new URL(f.ref, base))).arrayBuffer());
             let mx = 0, s = 0;
@@ -92,7 +95,14 @@ export function ClipRun({ clipUrl, entry, want }: { clipUrl: string; entry: Mode
           if (alive) setRows([...out]);
         }
         // as the live page: the calibration passes after the last dot, with the crop-scale reference from all of them
-        model.setScaleRef(scaleRef(dots.map((d) => d.aux)));
+        const sref = info.aux_scale_rel ? scaleRef(dots) : null;
+        model.setScaleRef(sref);
+        if (sref !== null) for (const [i, f] of clip.frames.entries()) {
+          const r = out[i];
+          if (!r.aux) continue;
+          r.aux29 = r.aux[29] - sref;
+          if (f.aux) { r.aux29Diff = Math.abs(r.aux29 - f.aux[29]); r.auxDiff = Math.max(r.auxDiff ?? 0, r.aux29Diff); }
+        }
         for (const d of dots) {
           const o = await model.run(d.img, d.aux, true);
           cals.push({ grid: d.grid, mm: d.mm, cal: o.cal! });
@@ -107,7 +117,7 @@ export function ClipRun({ clipUrl, entry, want }: { clipUrl: string; entry: Mode
           out[l.i].mm = o.mm; out[l.i].ms = o.ms;
           if (alive) setRows([...out]);
         }
-        const res = { model: info.name, backend: plan.backend, dtype: plan.dtype, order: order.map((k) => cals[k].grid), frames: out };
+        const res = { model: info.name, backend: plan.backend, dtype: plan.dtype, K: info.K, scaleRel: !!info.aux_scale_rel, scaleRef: sref, order: order.map((k) => cals[k].grid), frames: out };
         (window as unknown as { __clipResult: unknown }).__clipResult = res;
         say("done");
         await model.release();

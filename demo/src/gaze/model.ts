@@ -6,6 +6,7 @@
 // weights (.onnx.data) are handed to ORT as external data.
 import * as ort from "onnxruntime-web/webgpu";
 import { fileUrl, type ModelEntry } from "./models";
+import { CORNERS } from "./calib";
 import type { WindowGeom } from "./window";
 
 ort.env.wasm.wasmPaths = new URL("./ort/", document.baseURI).href;
@@ -51,8 +52,13 @@ export interface GazeModel {
   release(): Promise<void>;
 }
 
-/** The reference for aux_scale_rel: the mean log crop scale of the calibration frames (training: the ring corners). */
-export const scaleRef = (auxs: Float32Array[]) => auxs.reduce((s, a) => s + a[29], 0) / Math.max(1, auxs.length);
+/** The reference for aux_scale_rel, as in training: the mean log crop scale (aux[29]) of the corner dots' frames
+ * (at least 3 of them), else of all calibration frames. */
+export function scaleRef(dots: { grid: number; aux: Float32Array }[]): number {
+  const corners = dots.filter((d) => CORNERS.includes(d.grid));
+  const use = corners.length >= 3 ? corners : dots;
+  return use.reduce((s, d) => s + d.aux[29], 0) / Math.max(1, use.length);
+}
 
 export async function fetchInfo(m: ModelEntry): Promise<ModelInfo> {
   const r = await fetch(fileUrl(m, "model.json"), { cache: "no-cache" });
