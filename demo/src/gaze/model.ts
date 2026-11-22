@@ -26,16 +26,17 @@ export interface ModelInfo {
   label_frame: "screen-centre";
   bin_centres: { x: number[]; y: number[] };
   cam_delay_ms: number; // the calibration frame = the one showing the eye this long after the Space press
-  files: Record<"fp16" | "fp32", ModelFile>;
-  kv_files: Record<"fp16" | "fp32", ModelFile>;
+  files: Partial<Record<Dtype, ModelFile>> & Record<"fp16" | "fp32", ModelFile>;
+  kv_files: Partial<Record<Dtype, ModelFile>> & Record<"fp16" | "fp32", ModelFile>;
   /** The log crop-scale input (aux[29]) is relative to the calibration frames: minus their mean (setScaleRef). */
   aux_scale_rel?: boolean;
 }
 
 export type Backend = "webgpu" | "wasm";
-export type Dtype = "fp16" | "fp32";
+// q8 / q8.fp32: 8-bit weights (MatMulNBits), fp16 / fp32 compute; about half / a quarter of fp16 / fp32's download
+export type Dtype = "fp16" | "fp32" | "q8" | "q8.fp32";
 
-export interface Plan { backend: Backend; dtype: Dtype; why: string; adapter: string }
+export interface Plan { backend: Backend; dtype: Dtype; why: string; adapter: string; kvWasm?: boolean }
 
 export interface Dist { px: Float32Array; py: Float32Array; xMm: Float32Array; yMm: Float32Array }
 export interface GazeOut { mm: [number, number]; cal?: Float32Array; dist: Dist; ms: number }
@@ -75,14 +76,23 @@ export async function planModel(info: ModelInfo, want?: { backend?: Backend; dty
   if (adapter) {
     ort.env.webgpu.adapter = adapter as never;
     const f16 = adapter.features.has("shader-f16");
-    const dtype: Dtype = want?.dtype === "fp32" || !f16 ? "fp32" : "fp16";
+    const dtype = pickDtype(info, f16, want?.dtype);
     const name = [adapter.info?.vendor, adapter.info?.architecture || adapter.info?.description].filter(Boolean).join(" ") || "GPU";
-    return { backend: "webgpu", dtype, why: f16 ? "WebGPU with shader-f16" : "WebGPU without shader-f16", adapter: name };
+    // the fp32 kv graphs round the calibration features to fp16 inside (a Cast with no shader without shader-f16): on such
+    // devices the kv graph (once per calibration) runs on wasm
+    return { backend: "webgpu", dtype, why: f16 ? "WebGPU with shader-f16" : "WebGPU without shader-f16", adapter: name, kvWasm: !f16 };
   }
   ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
   const why = want?.backend === "wasm" ? "wasm asked for" : !gpu ? (self.isSecureContext ? "no WebGPU in this browser" : "not a secure context (open it over https)") : "no WebGPU adapter";
-  void info;
-  return { backend: "wasm", dtype: "fp32", why, adapter: `CPU, ${ort.env.wasm.numThreads} thread${ort.env.wasm.numThreads === 1 ? "" : "s"}` };
+  return { backend: "wasm", dtype: pickDtype(info, false, want?.dtype), why, adapter: `CPU, ${ort.env.wasm.numThreads} thread${ort.env.wasm.numThreads === 1 ? "" : "s"}` };
+}
+
+/** ?dtype= wins if the model has it; else 8-bit weights when published (fp16 compute with shader-f16, else fp32). */
+function pickDtype(info: ModelInfo, f16: boolean, want?: Dtype): Dtype {
+  const has = (d: Dtype) => !!info.files[d] && !!info.kv_files[d] && (f16 || !d.startsWith("fp16") && d !== "q8");
+  if (want && has(want)) return want;
+  for (const d of (f16 ? ["q8", "fp16"] : ["q8.fp32", "fp32"]) as Dtype[]) if (has(d)) return d;
+  return "fp32";
 }
 
 export type Progress = (loaded: number, total: number, what: string) => void;
@@ -125,7 +135,7 @@ async function pruneCache(keep: string[]) {
 }
 
 export async function loadModel(entry: ModelEntry, info: ModelInfo, plan: Plan, onProgress?: Progress): Promise<GazeModel> {
-  const main = info.files[plan.dtype], kvf = info.kv_files[plan.dtype];
+  const main = info.files[plan.dtype]!, kvf = info.kv_files[plan.dtype]!;
   const parts: { file: string; bytes: number }[] = [main, ...(main.data ? [main.data] : []), kvf];
   const total = parts.reduce((n, p) => n + p.bytes, 0);
   let loaded = 0;
@@ -148,7 +158,7 @@ export async function loadModel(entry: ModelEntry, info: ModelInfo, plan: Plan, 
   });
   delete got[main.file];
   if (main.data) delete got[main.data.file];
-  const kv = await ort.InferenceSession.create(got[kvf.file], opts);
+  const kv = await ort.InferenceSession.create(got[kvf.file], plan.kvWasm ? { executionProviders: ["wasm"], graphOptimizationLevel: "all" as const } : opts);
   return xattnModel(info, plan, session, kv);
 }
 
